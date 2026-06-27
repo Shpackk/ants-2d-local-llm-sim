@@ -3,20 +3,20 @@ from concurrent.futures import ThreadPoolExecutor
 import pygame
 
 from colony import Colony
-from config import FPS, SCREEN_HEIGHT, SCREEN_WIDTH
+from config import FPS, MAX_SIMULATION_TICKS, SCREEN_HEIGHT, SCREEN_WIDTH
 from llm_controller import LLMQueenController
 from ui.renderer import Renderer
 from world import World
 
 
-JAN_MODEL_NAME = "Qwen3_5-4B-IQ4_XS"
-QUEEN_INTERVAL_SECONDS = 20
+JAN_MODEL_NAME = "empero-ai\\Qwythos-9B-Claude-Mythos-5-1M-Q6_K"
+QUEEN_INTERVAL_SECONDS = 5
 
 
 def main() -> None:
     pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Ant Colony Simulation - Phase 1")
+    pygame.display.set_caption("Ant Colony Simulation - LLM Challenge")
     clock = pygame.time.Clock()
 
     world = World()
@@ -39,14 +39,19 @@ def main() -> None:
         colony.update(world)
         world.update(colony)
 
+        if world.tick_count >= MAX_SIMULATION_TICKS and not colony.goal_reached and not colony.lost:
+            colony.lost = True
+            colony.loss_reason = "max ticks reached"
+
         if queen_future is not None and queen_future.done():
             command = queen_future.result()
             queen_future = None
-            colony.execute_queen_command(command)
+            if not colony.goal_reached and not colony.lost:
+                colony.execute_queen_command(command)
 
         dt = clock.get_time() / 1000.0
         queen_timer += dt
-        if queen_timer >= QUEEN_INTERVAL_SECONDS and queen_future is None:
+        if queen_timer >= QUEEN_INTERVAL_SECONDS and queen_future is None and not colony.goal_reached and not colony.lost:
             queen_timer = 0.0
             colony_state = colony.get_state_summary(world)
             queen_future = queen_executor.submit(queen_controller.decide, colony_state)

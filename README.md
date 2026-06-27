@@ -32,5 +32,10 @@ python main.py
 ```
 
 ## Notes
-
 Written with GPT-5.5 medium reasoning.
+
+- Qwen3.5-4B - too dumb (or maybe I am too dumb to make it work here, or maybe maybe)
+- Qwen3_5-9B-Q5_K_M - starves food sources till 0, does not explore new sources if 1 is available, thus waists time when the first source is drained to find a new one. After all sources of food are drained it tends to send everyone to explore, even though it has enough food to reach the goal while all current ants are idle, eventually colony dies.
+- gemma-4-12B-it-Q5_K_M - same thing as Qwen3_5-9B-Q5_K_M (but eats way more compute power from GPU)
+- Mistral-NeMo-12B-Abliterated_i1-Q5_K_M - "pressing all buttons". Sent ants to explore, next call call them back, then assign to gather food even though no food was found. Felt like a cat that stepped on the keyboard.
+- Qwythos-9B-Claude-Mythos-5-1M-Q6_K - reached the "possible end game state" as other models, but way faster, still didn't take the path of "produce more ants to get to the goal" and kept sending ants to explore and called them back again. Result = dead colony.
