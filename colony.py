@@ -91,6 +91,7 @@ class Colony:
         )
         workers_foraging = sum(1 for worker in self.workers if worker.state in ("MOVING_TO_FOOD", "CARRYING_FOOD_HOME"))
         workers_returning_with_food = sum(1 for worker in self.workers if worker.carrying_food)
+        food_in_transit = sum(worker.carrying_food_amount for worker in self.workers if worker.carrying_food)
         workers_available_for_food = workers_idle + workers_foraging
         warriors_idle = sum(1 for warrior in self.warriors if warrior.state == "IDLE")
         threats_attacking_nest = sum(1 for threat in world.threats if threat.state == "ATTACKING_NEST")
@@ -109,6 +110,19 @@ class Colony:
             }
             for food in known_food
         ]
+        living_ants = self.living_ant_count()
+        eggs_count = len(self.eggs)
+        ants_needed = max(0, COLONY_TARGET_ANTS - living_ants)
+        ants_needed_after_current_eggs = max(0, COLONY_TARGET_ANTS - living_ants - eggs_count)
+        food_needed_for_missing_eggs = ants_needed_after_current_eggs * FOOD_COST_PER_EGG
+        food_reserve_for_hatch_window = math.ceil(living_ants * EGG_HATCH_TICKS / ANT_FOOD_CONSUMPTION_TICKS)
+        egg_affordable_after_reserve = max(0, (self.food_storage - food_reserve_for_hatch_window) // FOOD_COST_PER_EGG)
+        stored_food_after_missing_eggs = self.food_storage - food_needed_for_missing_eggs
+        food_buffer_ticks_without_new_food = (
+            int(((self.food_storage + food_in_transit) * ANT_FOOD_CONSUMPTION_TICKS) / living_ants)
+            if living_ants > 0
+            else 0
+        )
 
         return {
             "tick": world.tick_count,
@@ -116,10 +130,19 @@ class Colony:
             "goal_reached": self.goal_reached,
             "lost": self.lost,
             "loss_reason": self.loss_reason,
-            "living_ants": self.living_ant_count(),
+            "living_ants": living_ants,
             "target_ants": COLONY_TARGET_ANTS,
+            "ants_needed": ants_needed,
+            "eggs_needed_after_current_eggs": ants_needed_after_current_eggs,
+            "food_needed_for_missing_eggs": food_needed_for_missing_eggs,
+            "max_eggs_affordable_from_storage": self.food_storage // FOOD_COST_PER_EGG,
+            "food_reserve_for_hatch_window": food_reserve_for_hatch_window,
+            "egg_affordable_after_reserve": egg_affordable_after_reserve,
+            "stored_food_after_missing_eggs": stored_food_after_missing_eggs,
+            "food_buffer_ticks_without_new_food": food_buffer_ticks_without_new_food,
             "queen_alive": self.queen is not None,
             "food_storage": self.food_storage,
+            "food_in_transit": food_in_transit,
             "resource_storage": self.resource_storage,
             "resources_available": resources_available,
             "workers_total": len(self.workers),

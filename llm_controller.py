@@ -131,12 +131,21 @@ Allowed actions:
 - do_nothing
 
 Decision rules:
-- If known_food_available_sources is 0, explore with idle workers.
+- First compare objective math. Check ants_needed, eggs_needed_after_current_eggs, food_needed_for_missing_eggs, food_reserve_for_hatch_window, egg_affordable_after_reserve, and stored_food_after_missing_eggs.
+- Prefer actions that reduce eggs_needed_after_current_eggs with stored food when egg_affordable_after_reserve can pay for useful eggs.
+- Use multiple commands when two jobs are useful. Example: assign workers to food and lay eggs in the same response.
+- Put food or defense commands before egg commands when both are useful.
+- Idle ants are acceptable. Do not assign workers only because they are idle.
+- Explore only when unknown food is needed for the objective, not merely because known_food_available_sources is 0.
+- When known_food_available_sources is 0, compare stored food against food_needed_for_missing_eggs before exploring.
+- Exploration has low value when stored food can already pay for the missing eggs and no immediate threat exists.
+- Laying extra eggs has no value beyond target_ants. Do not lay more eggs than eggs_needed_after_current_eggs.
+- Do not spend food_storage to 0. Lay eggs only up to egg_affordable_after_reserve unless food_reserve_for_hatch_window is 0.
 - If workers_exploring_too_long is above 0, recall long explorers.
-- If known_food_sources is above 0 and food_storage is low, forage with idle workers.
+- If known_food_sources is above 0 and food_storage is low compared with food_needed_for_missing_eggs, forage with idle workers.
 - Returning food carriers are included in workers_available_for_food; assign them to food to make them continue after dropoff.
 - If known_food_average_reserve_ratio is low, reduce foraging or explore for more sources.
-- If enough workers are idle, split workers between food and exploration instead of using one action.
+- If enough workers are idle and more food is needed, split workers between food and exploration instead of using one action.
 - If food_storage is safely above food_cost_per_egg and workers are enough to keep foraging, lay worker eggs.
 - Account for delayed hatching. Eggs do not help immediately.
 - Do not spend all food on eggs; reserve food to prevent starvation.
@@ -165,6 +174,7 @@ Do not write text after the JSON.
 Return up to 4 commands.
 Use multiple commands when splitting workers between food and exploration or when recalling scouts and assigning other workers.
 Commands are applied in order.
+Each command must have positive objective value. If food and eggs are both useful, return both commands. If every useful egg has already been laid or paid for and no threat exists, use do_nothing.
 
 colony_state:
 {json.dumps(colony_state, indent=2)}
@@ -236,6 +246,10 @@ Return exactly this schema:
         known_food_sources = int(state.get("known_food_sources", 0))
         known_food_available_sources = int(state.get("known_food_available_sources", known_food_sources))
         food_cost_per_egg = int(state.get("food_cost_per_egg", 5))
+        eggs_needed_after_current_eggs = int(state.get("eggs_needed_after_current_eggs", 0))
+        egg_affordable_after_reserve = int(
+            state.get("egg_affordable_after_reserve", food_storage // food_cost_per_egg)
+        )
 
         if action == "assign_workers_to_explore":
             amount = max(0, min(amount, workers_idle))
@@ -243,8 +257,8 @@ Return exactly this schema:
             amount = max(0, min(amount, max(workers_exploring_too_long, workers_exploring)))
         elif action == "assign_workers_to_food":
             if known_food_available_sources <= 0:
-                action = "assign_workers_to_explore"
-                amount = max(0, min(amount, workers_idle))
+                action = "do_nothing"
+                amount = 0
             else:
                 amount = max(0, min(amount, workers_available_for_food_soon))
         elif action == "assign_workers_to_repair":
@@ -258,17 +272,19 @@ Return exactly this schema:
         elif action == "remove_threats":
             amount = max(0, min(amount, warriors_idle))
         elif action == "lay_worker_eggs":
-            if food_storage < food_cost_per_egg * 2:
+            affordable = min(food_storage // food_cost_per_egg, egg_affordable_after_reserve)
+            if eggs_needed_after_current_eggs <= 0 or affordable <= 0:
                 action = "do_nothing"
                 amount = 0
             else:
-                amount = max(0, min(amount, 3))
+                amount = max(0, min(amount, 3, eggs_needed_after_current_eggs, affordable))
         elif action == "lay_warrior_eggs":
-            if food_storage < food_cost_per_egg * 3:
+            affordable = min(food_storage // food_cost_per_egg, egg_affordable_after_reserve)
+            if eggs_needed_after_current_eggs <= 0 or affordable <= 0:
                 action = "do_nothing"
                 amount = 0
             else:
-                amount = max(0, min(amount, 2))
+                amount = max(0, min(amount, 2, eggs_needed_after_current_eggs, affordable))
         elif action == "do_nothing":
             amount = 0
 
@@ -297,6 +313,13 @@ Return exactly this schema:
             "workers_foraging": int(state.get("workers_foraging", 0)),
             "warriors_idle": int(state.get("warriors_idle", 0)),
             "food_storage": int(state.get("food_storage", 0)),
+            "eggs_needed_after_current_eggs": int(state.get("eggs_needed_after_current_eggs", 0)),
+            "egg_affordable_after_reserve": int(
+                state.get(
+                    "egg_affordable_after_reserve",
+                    state.get("food_storage", 0) // max(1, state.get("food_cost_per_egg", 5)),
+                )
+            ),
         }
 
     def _consume_validation_budget(self, command: dict, state: dict) -> None:
@@ -325,6 +348,11 @@ Return exactly this schema:
             state["warriors_idle"] = max(0, state.get("warriors_idle", 0) - amount)
         elif action in ("lay_worker_eggs", "lay_warrior_eggs"):
             state["food_storage"] = max(0, state.get("food_storage", 0) - amount * food_cost_per_egg)
+            state["eggs_needed_after_current_eggs"] = max(
+                0,
+                state.get("eggs_needed_after_current_eggs", 0) - amount,
+            )
+            state["egg_affordable_after_reserve"] = max(0, state.get("egg_affordable_after_reserve", 0) - amount)
 
     def _command_batch(self, *commands: dict) -> dict:
         filtered = [command for command in commands if command.get("action") != "do_nothing"]
@@ -348,6 +376,9 @@ Return exactly this schema:
         known_food_remaining = state.get("known_food_remaining", 0)
         known_food_average_reserve_ratio = state.get("known_food_average_reserve_ratio", 0.0)
         food_cost_per_egg = state.get("food_cost_per_egg", 5)
+        eggs_needed_after_current_eggs = state.get("eggs_needed_after_current_eggs", 0)
+        food_needed_for_missing_eggs = state.get("food_needed_for_missing_eggs", eggs_needed_after_current_eggs * food_cost_per_egg)
+        max_eggs_affordable = state.get("egg_affordable_after_reserve", food_storage // food_cost_per_egg)
 
         if (threats_attacking_nest > 0 or active_threats > 0) and warriors_idle > 0:
             return self._command_batch({"action": "remove_threats", "amount": warriors_idle, "target": None})
@@ -358,24 +389,58 @@ Return exactly this schema:
         if workers_exploring_too_long > 0:
             return self._command_batch({"action": "recall_long_explorers", "amount": workers_exploring_too_long, "target": None})
 
-        if known_food_available_sources <= 0 and workers_idle > 0:
+        if eggs_needed_after_current_eggs > 0 and max_eggs_affordable > 0:
+            egg_command = {
+                "action": "lay_worker_eggs",
+                "amount": min(3, eggs_needed_after_current_eggs, max_eggs_affordable),
+                "target": None,
+            }
+            if workers_available_for_food > 0 and known_food_available_sources > 0:
+                return self._command_batch(
+                    {"action": "assign_workers_to_food", "amount": workers_available_for_food, "target": None},
+                    egg_command,
+                )
+            return self._command_batch(
+                egg_command
+            )
+
+        if known_food_available_sources <= 0 and workers_idle > 0 and food_storage < food_needed_for_missing_eggs:
             return self._command_batch({"action": "assign_workers_to_explore", "amount": workers_idle, "target": None})
 
-        if known_food_average_reserve_ratio < 0.2 and food_storage >= 20 and workers_idle > 0:
+        if (
+            known_food_average_reserve_ratio < 0.2
+            and food_storage >= 20
+            and workers_idle > 0
+            and food_storage < food_needed_for_missing_eggs
+        ):
             return self._command_batch({"action": "assign_workers_to_explore", "amount": workers_idle, "target": None})
 
-        if food_storage < 30 and workers_available_for_food > 0:
+        if food_storage < max(30, food_needed_for_missing_eggs) and workers_available_for_food > 0:
             return self._command_batch({"action": "assign_workers_to_food", "amount": workers_available_for_food, "target": None})
 
-        if food_storage >= food_cost_per_egg * 4 and known_food_remaining >= food_cost_per_egg * 2:
+        if (
+            eggs_needed_after_current_eggs > 0
+            and food_storage >= food_cost_per_egg * 4
+            and known_food_remaining >= food_cost_per_egg * 2
+        ):
             if workers_available_for_food > 0:
                 return self._command_batch(
-                    {"action": "lay_worker_eggs", "amount": 2, "target": None},
+                    {
+                        "action": "lay_worker_eggs",
+                        "amount": min(2, eggs_needed_after_current_eggs, max_eggs_affordable),
+                        "target": None,
+                    },
                     {"action": "assign_workers_to_food", "amount": workers_available_for_food, "target": None},
                 )
-            return self._command_batch({"action": "lay_worker_eggs", "amount": 2, "target": None})
+            return self._command_batch(
+                {
+                    "action": "lay_worker_eggs",
+                    "amount": min(2, eggs_needed_after_current_eggs, max_eggs_affordable),
+                    "target": None,
+                }
+            )
 
-        if workers_available_for_food > 0:
+        if food_storage < food_needed_for_missing_eggs and workers_available_for_food > 0:
             return self._command_batch({"action": "assign_workers_to_food", "amount": workers_available_for_food, "target": None})
 
         return self._command_batch({"action": "do_nothing", "amount": 0, "target": None})
